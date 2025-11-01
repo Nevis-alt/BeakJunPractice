@@ -1,0 +1,226 @@
+﻿@page "/typing-game"
+
+<PageTitle>Typing Game</PageTitle>
+
+<div class="container text-center mt-5">
+    <h1 class="mb-4">Blazor 타이핑 연습</h1>
+    <p class="lead text-muted">영문과 한글이 섞인 문장을 입력해보세요.</p>
+
+    @if (IsFinished)
+    {
+        <div class="alert alert-success mt-4">
+            <h4>🎉 완료!</h4>
+            <p>축하합니다! 문장을 성공적으로 입력했습니다.</p>
+            <button class="btn btn-primary" @onclick="ResetGame">다시 시작</button>
+        </div>
+    }
+    else
+    {
+        <div class="typing-area p-4 border rounded shadow-sm bg-light mb-4">
+            <p class="h4 text-start font-monospace mb-0">
+                @RenderTypedText()
+            </p>
+        </div>
+
+        <!-- 변경: @bind-value/event 대신 value + @oninput 사용 -->
+        <input @ref="InputRef"
+               value="@UserText"
+               @oninput="OnInputChanged"
+               class="form-control form-control-lg font-monospace"
+               placeholder="여기에 입력하세요..."
+               disabled="@IsFinished"
+               autofocus />
+
+        <div class="row mt-4">
+            <div class="col-6">
+                <p class="h5">
+                    입력 정확도:
+                    <span class="@AccuracyClass">@(CurrentIndex) / @(TargetText.Length)</span>
+                </p>
+            </div>
+            <div class="col-6">
+                <button class="btn btn-secondary" @onclick="ResetGame">초기화</button>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    // 🔹 예시: 영문 + 한글 혼합 문장
+    private const string TargetText = "Hello, Blazor! 삽을 입력해보세요.";
+
+    private string UserText = string.Empty;
+    private int CurrentIndex = 0;
+    private bool IsFinished => CurrentIndex == TargetText.Length;
+    private ElementReference InputRef;
+
+    private string AccuracyClass =>
+        UserText.Length > 0 && CurrentIndex < UserText.Length &&
+        CompareDynamic(TargetText[CurrentIndex].ToString(), UserText[CurrentIndex].ToString()) == "wrong"
+        ? "text-danger"
+        : "text-success";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await InputRef.FocusAsync();
+        }
+    }
+
+    // ===== 한글 분해 테이블 =====
+    private static readonly string[] CHO = { "ㄱ","ㄲ","ㄴ","ㄷ","ㄸ","ㄹ","ㅁ","ㅂ","ㅃ","ㅅ","ㅆ","ㅇ","ㅈ","ㅉ","ㅊ","ㅋ","ㅌ","ㅍ","ㅎ" };
+    private static readonly string[] JUNG = { "ㅏ","ㅐ","ㅑ","ㅒ","ㅓ","ㅔ","ㅕ","ㅖ","ㅗ","ㅘ","ㅙ","ㅚ","ㅛ","ㅜ","ㅝ","ㅞ","ㅟ","ㅠ","ㅡ","ㅢ","ㅣ" };
+    private static readonly string[] JONG = { "","ㄱ","ㄲ","ㄳ","ㄴ","ㄵ","ㄶ","ㄷ","ㄹ","ㄺ","ㄻ","ㄼ","ㄽ","ㄾ","ㄿ","ㅀ","ㅁ","ㅂ","ㅄ","ㅅ","ㅆ","ㅇ","ㅈ","ㅊ","ㅋ","ㅌ","ㅍ","ㅎ" };
+
+    private static List<string> DecomposeHangul(string s)
+    {
+        var result = new List<string>();
+        foreach (var ch in s)
+        {
+            int code = ch - 0xAC00;
+            if (code >= 0 && code < 11172)
+            {
+                int cho = code / 588;
+                int jung = (code % 588) / 28;
+                int jong = code % 28;
+                result.Add(CHO[cho]);
+                result.Add(JUNG[jung]);
+                if (jong != 0)
+                    result.Add(JONG[jong]);
+            }
+            else
+            {
+                result.Add(ch.ToString());
+            }
+        }
+        return result;
+    }
+
+    // ===== 핵심 비교 함수 (영문 + 한글 모두 대응) =====
+    private static string CompareDynamic(string correct, string typed)
+    {
+        if (string.IsNullOrEmpty(typed))
+            return "progress";
+
+        if (IsHangulIncomplete(typed))
+            return "progress";
+
+        if (correct == typed)
+            return "correct";
+
+        bool isKoreanCorrect = IsHangul(correct[0]);
+        bool isKoreanTyped = IsHangul(typed[0]);
+
+        if (isKoreanCorrect && isKoreanTyped)
+        {
+            var c = DecomposeHangul(correct);
+            var t = DecomposeHangul(typed);
+
+            if (t.Count <= c.Count)
+            {
+                for (int i = 0; i < t.Count; i++)
+                {
+                    if (c[i] != t[i])
+                        return "wrong";
+                }
+                return "progress"; // 조합 중
+            }
+            return "wrong";
+        }
+
+        // 한글이 아니라면 단순 비교 (원하면 IgnoreCase 옵션 추가 가능)
+        return correct == typed ? "correct" : "wrong";
+    }
+    private static bool IsHangulIncomplete(string s)
+    {
+        if (string.IsNullOrEmpty(s))
+            return false;
+
+        char last = s[^1];
+
+        // Unicode Hangul 조합 영역: 0xAC00~0xD7A3는 완성형
+        if (last >= 0xAC00 && last <= 0xD7A3)
+            return false; // 완성형이므로 진행 중 아님
+
+        // 나머지 한글 자모(초성, 중성, 종성) 범위
+        // 0x1100~0x11FF, 0x3130~0x318F 등
+        if ((last >= 0x1100 && last <= 0x11FF) || (last >= 0x3130 && last <= 0x318F))
+            return true; // 조합 중
+
+        return false; // 영문, 숫자, 기호 등
+    }
+
+
+    private static bool IsHangul(char ch)
+    {
+        return ch >= 0xAC00 && ch <= 0xD7A3;
+    }
+
+    // ===== 이벤트 핸들러 (이게 실제로 호출됩니다) =====
+    private void OnInputChanged(ChangeEventArgs e)
+    {
+        // e.Value는 input.value의 전체 문자열(조합중인 한글 포함)을 담고 옵니다.
+        UserText = e.Value?.ToString() ?? string.Empty;
+        UpdateGameState();
+        // 필요하면 StateHasChanged() 호출 가능 (Blazor가 자동으로 렌더링합니다)
+    }
+
+    private void UpdateGameState()
+    {
+        int index = 0;
+
+        while (index < UserText.Length && index < TargetText.Length)
+        {
+            var correctChar = TargetText[index].ToString();
+            var typedChar = UserText[index].ToString();
+
+            var result = CompareDynamic(correctChar, typedChar);
+
+            if (result == "wrong")
+                break;
+
+            index++;
+        }
+
+        CurrentIndex = index;
+    }
+
+    private MarkupString RenderTypedText()
+    {
+        var html = string.Empty;
+
+        // ✅ 맞은 부분
+        if (CurrentIndex > 0)
+            html += $"<span class='text-success'>{TargetText[..CurrentIndex]}</span>";
+
+        // ⚠️ 현재 입력 중인 글자
+        if (CurrentIndex < TargetText.Length)
+        {
+            string currentChar = TargetText[CurrentIndex].ToString();
+            string cssClass = "bg-warning";
+
+            if (UserText.Length > CurrentIndex)
+            {
+                var result = CompareDynamic(currentChar, UserText[CurrentIndex].ToString());
+                cssClass = result == "wrong" ? "text-danger text-decoration-underline" : "bg-warning";
+            }
+
+            html += $"<span class='{cssClass}'>{currentChar}</span>";
+
+            // 나머지
+            if (CurrentIndex + 1 < TargetText.Length)
+                html += $"<span class='text-muted'>{TargetText[(CurrentIndex + 1)..]}</span>";
+        }
+
+        return new MarkupString(html);
+    }
+
+    private async Task ResetGame()
+    {
+        UserText = string.Empty;
+        CurrentIndex = 0;
+        await Task.Delay(10);
+        await InputRef.FocusAsync();
+    }
+}
